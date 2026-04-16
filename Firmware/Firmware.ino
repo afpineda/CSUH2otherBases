@@ -35,6 +35,8 @@ std::string DEVICE_MANUFACTURER = "Mamandurrio";
 
 // #define VERTICAL_CIRCUIT_LAYOUT 0
 
+#define BLE_CUSTOM_PID 0xFFF0
+
 //------------------------------------------------------------------
 // Setup
 //------------------------------------------------------------------
@@ -125,7 +127,7 @@ void customFirmware()
     hid::configure(
         DEVICE_NAME,
         DEVICE_MANUFACTURER,
-        true
+        false
 #if defined(BLE_CUSTOM_VID)
         ,
         BLE_CUSTOM_VID
