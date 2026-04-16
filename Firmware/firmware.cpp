@@ -1,0 +1,109 @@
+/**
+ * @file firmware.cpp
+ *
+ * @author Ángel Fernández Pineda. Madrid. Spain.
+ * @date 2025-02-27
+ * @brief Performs initialization and launches execution.
+ *
+ * @copyright Licensed under the EUPL
+ *
+ */
+
+//-------------------------------------------------------------------
+// Imports
+//-------------------------------------------------------------------
+
+#include "SimWheel.hpp"
+#include "SimWheelInternals.hpp"
+#include "InternalServices.hpp"
+
+#if !CD_CI
+
+#include <exception>
+#include "freertos/FreeRTOS.h"
+#include <Arduino.h> // For conditional compilation
+
+#endif
+
+//-------------------------------------------------------------------
+//-------------------------------------------------------------------
+// Internal
+//-------------------------------------------------------------------
+//-------------------------------------------------------------------
+
+void firmwareSetIsRunningState(bool state)
+{
+    FirmwareService::_is_running = state;
+}
+
+//-------------------------------------------------------------------
+//-------------------------------------------------------------------
+// Public
+//-------------------------------------------------------------------
+//-------------------------------------------------------------------
+
+void firmware::run()
+{
+    if (!FirmwareService::call().isRunning())
+    {
+        internals::storage::getReady();
+        internals::hid::common::getReady();
+        internals::inputMap::getReady();
+        internals::inputHub::getReady();
+        internals::inputs::getReady();
+        internals::batteryCalibration::getReady();
+        internals::batteryMonitor::getReady();
+        internals::power::getReady();
+        internals::pixels::getReady();
+        internals::ui::getReady();
+        OnStart();
+        firmwareSetIsRunningState(true);
+    }
+}
+
+void firmware::run(void (*func)())
+{
+#if CD_CI
+    func();
+    firmware::run();
+#else
+    // Arduino-ESP32 does not print exception messages
+    try
+    {
+        func();
+        firmware::run();
+    }
+    catch (std::exception &e)
+    {
+        // Delay to allow log_e() to print text
+        // (may be running in another thread)
+        vTaskDelay(pdMS_TO_TICKS(500));
+
+        // Initialize UARTs
+        Serial0.end();
+        Serial0.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT && !ARDUINO_USB_MODE
+        USBSerial.end();
+        USBSerial.begin(115200);
+#endif
+#if ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE
+        HWCDCSerial.end();
+        HWCDCSerial.begin(115200);
+#endif
+        for (;;)
+        {
+            Serial0.println("**CUSTOM FIRMWARE ERROR**");
+            Serial0.println(e.what());
+#if ARDUINO_USB_CDC_ON_BOOT && !ARDUINO_USB_MODE
+            USBSerial.println("**CUSTOM FIRMWARE ERROR**");
+            USBSerial.println(e.what());
+#endif
+#if ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE
+            HWCDCSerial.println("**CUSTOM FIRMWARE ERROR**");
+            HWCDCSerial.println(e.what());
+#endif
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
+    }
+#endif // CD_CI else
+}

@@ -3,5 +3,5 @@
     "board": "esp32:esp32:esp32",
     "output": "X:\\temp\\Arduino_BUILD",
     "sketch": "Firmware\\Firmware.ino",
-    "port": "COM5"
+    "port": "COM4"
 }

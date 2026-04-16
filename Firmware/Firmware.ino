@@ -7,11 +7,7 @@
  *
  */
 
-#include <Arduino.h>
-#include "SimWheel.h"
-// #include "soc/soc.h"
-// #include "soc/rtc_cntl_reg.h"
-//  #include "debugUtils.h"
+#include "SimWheel.hpp"
 
 //------------------------------------------------------------------
 // Global customization
@@ -37,7 +33,7 @@ std::string DEVICE_MANUFACTURER = "Mamandurrio";
 #define DPAD_LEFT 34
 #define DPAD_RIGHT 35
 
-//#define VERTICAL_CIRCUIT_LAYOUT 0
+// #define VERTICAL_CIRCUIT_LAYOUT 0
 
 //------------------------------------------------------------------
 // Setup
@@ -45,45 +41,55 @@ std::string DEVICE_MANUFACTURER = "Mamandurrio";
 
 void add3BtnModule_X_Y_Back(gpio_num_t X, gpio_num_t Y, gpio_num_t Back)
 {
-    inputs::addDigital(X, JOY_X, true, true);
-    inputs::addDigital(Y, JOY_Y, true, true);
-    inputs::addDigital(Back, JOY_BACK, true, true);
+    inputs::addButton(X, JOY_X);
+    inputs::addButton(Y, JOY_Y);
+    inputs::addButton(Back, JOY_BACK);
 }
 
 void add3BtnModule_LT_LB_LSB(gpio_num_t LT, gpio_num_t LB, gpio_num_t LSB)
 {
-    inputs::addDigital(LT, MOD_LT, true, true);
-    inputs::addDigital(LB, MOD_LB, true, true);
-    inputs::addDigital(LSB, MOD_LSB, true, true);
+    inputs::addButton(LT, MOD_LT);
+    inputs::addButton(LB, MOD_LB);
+    inputs::addButton(LSB, MOD_LSB);
 }
 
 void add3BtnModule_RT_RB_RSB(gpio_num_t RT, gpio_num_t RB, gpio_num_t RSB)
 {
-    inputs::addDigital(RT, MOD_RT, true, true);
-    inputs::addDigital(RB, MOD_RB, true, true);
-    inputs::addDigital(RSB, MOD_RSB, true, true);
+    inputs::addButton(RT, MOD_RT);
+    inputs::addButton(RB, MOD_RB);
+    inputs::addButton(RSB, MOD_RSB);
 }
 
 void add3BtnModule_A_B_Start(gpio_num_t A, gpio_num_t B, gpio_num_t Start)
 {
-    inputs::addDigital(A, JOY_A, true, true);
-    inputs::addDigital(B, JOY_B, true, true);
-    inputs::addDigital(Start, JOY_START, true, true);
+    inputs::addButton(A, JOY_A);
+    inputs::addButton(B, JOY_B);
+    inputs::addButton(Start, JOY_START);
 }
 
 void simWheelSetup()
 {
     //   Funky switch
-    inputs::addRotaryEncoder(GPIO_NUM_16, GPIO_NUM_39, FUNKY_CW, FUNKY_CCW, true);
-    inputs::addDigital(GPIO_NUM_36, DPAD_UP, true, false);
-    inputs::addDigital(GPIO_NUM_34, DPAD_LEFT, true, false);
-    inputs::addDigital(GPIO_NUM_35, DPAD_RIGHT, true, false);
-    inputs::addDigital(GPIO_NUM_19, DPAD_DOWN, true, true);
-    inputs::addDigital(GPIO_NUM_21, FUNKY_PUSH, true, true);
+    inputs::addRotaryEncoder(
+        GPIO_NUM_16,
+        GPIO_NUM_39,
+        FUNKY_CW,
+        FUNKY_CCW,
+        true);
+    inputs::addButton(GPIO_NUM_36, DPAD_UP);
+    inputs::addButton(GPIO_NUM_34, DPAD_LEFT);
+    inputs::addButton(GPIO_NUM_35, DPAD_RIGHT);
+    inputs::addButton(GPIO_NUM_19, DPAD_DOWN);
+    inputs::addButton(GPIO_NUM_21, FUNKY_PUSH);
 
     //   Additional rotary encoder
-    inputs::addRotaryEncoder(GPIO_NUM_17, GPIO_NUM_5, ROT_CW, ROT_CCW, false);
-    inputs::addDigital(GPIO_NUM_18, ROT_PUSH, true, true);
+    inputs::addRotaryEncoder(
+        GPIO_NUM_17,
+        GPIO_NUM_5,
+        ROT_CW,
+        ROT_CCW,
+        false);
+    inputs::addButton(GPIO_NUM_18, ROT_PUSH);
 
 #ifdef VERTICAL_CIRCUIT_LAYOUT
     //   3-button modules in vertical layout
@@ -100,18 +106,36 @@ void simWheelSetup()
 #endif
 
     //  shift paddles
-    inputs::addDigital(GPIO_NUM_32, JOY_LSHIFT_PADDLE, true, true);
-    inputs::addDigital(GPIO_NUM_25, JOY_RSHIFT_PADDLE, true, true);
+    inputs::addButton(GPIO_NUM_32, JOY_LSHIFT_PADDLE);
+    inputs::addButton(GPIO_NUM_25, JOY_RSHIFT_PADDLE);
 
     // Wheel functions
-    inputs::setDigitalClutchPaddles(MOD_LT, MOD_RT);
-    inputHub::setDPADControls(DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT);
-    inputHub::setClutchCalibrationButtons(FUNKY_CW, FUNKY_CCW);
-    inputHub::setSelectClutchFunctionBitmaps(
-        BITMAP(ROT_PUSH) | BITMAP(JOY_Y),
-        0ULL,
-        BITMAP(ROT_PUSH) | BITMAP(JOY_X),
-        BITMAP(ROT_PUSH) | BITMAP(JOY_BACK) );
+    inputHub::clutch::inputs(MOD_LT, MOD_RT);
+    inputHub::clutch::bitePointInputs(FUNKY_CW, FUNKY_CCW);
+    inputHub::clutch::cycleWorkingModeInputs({ROT_PUSH, JOY_Y});
+    inputHub::dpad::inputs(DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT);
+    inputMap::setOptimal();
+}
+
+//------------------------------------------------------------------
+
+void customFirmware()
+{
+    simWheelSetup();
+    hid::configure(
+        DEVICE_NAME,
+        DEVICE_MANUFACTURER,
+        true
+#if defined(BLE_CUSTOM_VID)
+        ,
+        BLE_CUSTOM_VID
+#if defined(BLE_CUSTOM_PID)
+        ,
+        BLE_CUSTOM_PID
+#endif
+#endif
+    );
+    hid::connectivity(Connectivity::BLE);
 }
 
 //------------------------------------------------------------------
@@ -120,16 +144,7 @@ void simWheelSetup()
 
 void setup()
 {
-    esp_log_level_set("*", ESP_LOG_ERROR);
-    clutchState::begin();
-    inputs::begin();
-    simWheelSetup();
-
-    hidImplementation::begin(
-        DEVICE_NAME,
-        DEVICE_MANUFACTURER,
-        false);
-    inputs::start();
+    firmware::run(customFirmware);
 }
 
 void loop()

@@ -1,0 +1,379 @@
+/**
+ * @file HAL.hpp
+ *
+ * @author Ángel Fernández Pineda. Madrid. Spain.
+ * @date 2025-02-11
+ * @brief Hardware abstraction and low-level utilities
+ *
+ * @copyright Licensed under the EUPL
+ *
+ */
+
+#pragma once
+
+//-------------------------------------------------------------------
+// Imports
+//-------------------------------------------------------------------
+
+#include "InternalTypes.hpp"
+#include "SimWheelTypes.hpp"
+
+#if !CD_CI
+#include "driver/i2c_types.h"  // For I2C operation
+#include "driver/i2c_master.h" // For I2C operation
+#include "freertos/FreeRTOS.h" // For pdMS_TO_TICKS
+#else
+#include <thread>
+#endif
+
+//-------------------------------------------------------------------
+// GLOBALS
+//-------------------------------------------------------------------
+
+/// @brief Cast GPIO to an ESP32 pin number
+#define AS_GPIO(pin) static_cast<gpio_num_t>((int)(pin))
+/// @brief Cast I2CBus to an ESP32 port number
+#define AS_PORT(bus) static_cast<i2c_port_num_t>(bus)
+/// @brief Macro to write a logic level in a GPIO pin
+#define GPIO_SET_LEVEL(pin, level) gpio_set_level(static_cast<gpio_num_t>((int)(pin)), (level))
+/// @brief Cast to an I2C slave device handle
+#define I2C_SLAVE(dev) static_cast<i2c_master_dev_handle_t>(dev)
+/// @brief Macro to read the logic level in a GPIO pin
+#define GPIO_GET_LEVEL(pin) gpio_get_level(static_cast<gpio_num_t>((int)(pin)))
+/// @brief Interrupt Service Routine
+typedef void (*ISRHandler)(void *arg);
+
+#if !CD_CI
+/// @brief Macro to wait in tick units
+#define DELAY_TICKS(ticks) vTaskDelay(ticks)
+/// @brief Macro to wait in millisecond units
+#define DELAY_MS(ms) vTaskDelay(pdMS_TO_TICKS(ms))
+#else
+#define DELAY_TICKS(ticks) std::this_thread::sleep_for(std::chrono::microseconds(ticks))
+#define DELAY_MS(ms) std::this_thread::sleep_for(std::chrono::milliseconds(ms))
+#endif
+
+// Each CPU instruction takes 6.25 nanoseconds in an ESP32 RISC-V @ 160 Mhz
+// Each CPU instruction takes 4.16 nanoseconds in an ESP32 Xtensa @ 240 Mhz
+
+/// @brief Time per loop of active_wait_ns() computed as 4 CPU instructions
+#define NS_PER_LOOP ((4000 + CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ - 1) / CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ)
+
+/**
+ * @brief Active wait without context switching
+ *
+ * @note Not accurate but close
+ *
+ * @param n Time to wait in nanoseconds
+ */
+#define active_wait_ns(n)                         \
+    for (uint32_t i = 0; i < n; i += NS_PER_LOOP) \
+        asm("");
+
+//-------------------------------------------------------------------
+// Exceptions
+//-------------------------------------------------------------------
+
+/**
+ * @brief Exception for I2C bus initialization failure
+ *
+ */
+class i2c_error : public std::runtime_error
+{
+public:
+    /**
+     * @brief Unable to initialize the I2C bus exception
+     *
+     * @param sda SDA pin number
+     * @param scl SCL pin number
+     * @param bus I2C bus
+     */
+    i2c_error(int sda, int scl, int bus)
+        : std::runtime_error(
+              "I2C: unable to initialize bus. SDA=" +
+              std::to_string(sda) +
+              " SCL=" +
+              std::to_string(scl) +
+              " BUS=" +
+              std::to_string(bus)) {}
+
+    /**
+     * @brief Invalid I2C address exception
+     *
+     * @param address I2C full address
+     */
+
+    i2c_error(uint8_t address)
+        : std::runtime_error(
+              "I2C: invalid address " +
+              std::to_string((int)address) +
+              " (dec)") {}
+
+    virtual ~i2c_error() noexcept {}
+};
+
+/**
+ * @brief Exception for I2C devices not found
+ *
+ */
+class i2c_device_not_found : public std::runtime_error
+{
+public:
+    /**
+     * @brief Construct a new i2c_device_not_found exception
+     *
+     * @param address I2C hardware or full address
+     * @param bus I2C bus
+     */
+    i2c_device_not_found(uint8_t address, int bus = 0)
+        : std::runtime_error(
+              "I2C: device not found, but required. Bus=" +
+              std::to_string(bus) +
+              " Hw/Full address=" +
+              std::to_string(address) +
+              " (dec)") {}
+
+    virtual ~i2c_device_not_found() noexcept {}
+};
+
+/**
+ * @brief Exception for unknown full I2C address
+ *
+ */
+class i2c_full_address_unknown : public std::runtime_error
+{
+public:
+    /**
+     * @brief Construct a new i2c_full_address_unknown exception
+     *
+     * @param hwAddress I2C hardware address
+     * @param bus I2C bus
+     */
+    i2c_full_address_unknown(uint8_t hwAddress, int bus = 0)
+        : std::runtime_error(
+              "I2C: unable to detect full address. Bus=" +
+              std::to_string(bus) +
+              " HW address=" +
+              std::to_string(hwAddress) +
+              " (dec)") {}
+
+    virtual ~i2c_full_address_unknown() noexcept {}
+};
+
+//-------------------------------------------------------------------
+// API
+//-------------------------------------------------------------------
+
+namespace internals
+{
+    //---------------------------------------------------------------
+    // Hardware abstraction
+    //---------------------------------------------------------------
+
+    namespace hal
+    {
+
+        //---------------------------------------------------------------
+        // I2C bus operation
+        //---------------------------------------------------------------
+
+        namespace i2c
+        {
+            /**
+             * @brief Initialize an I2C bus to certain pins.
+             *
+             * @note Must be called if you want to initialize a secondary bus.
+             *       Otherwise, there is no need to call, since the bus will be
+             *       automatically initialized.
+             *
+             * @note If required, must be called before using any I2C hardware.
+             *
+             * @note If external pullup resistors are in place,
+             *       the internal ones will reduce wire capacitance
+             *       as there are two resistors in parallel.
+             *       This is good or bad depending on the case.
+             *
+             * @param sda SDA pin for the I2C bus.
+             * @param scl SCL pin for the I2C bus.
+             * @param bus I2C bus to initialize.
+             * @param enableInternalPullup If true (default), the bus is pulled
+             *                             up using internal pullup resistors.
+             *                             If false, **external** pullup
+             *                             resistors must be in place as the
+             *                             internal ones are not enabled.
+             *                             Otherwise, the bus won't work.
+             */
+            void initialize(
+                GPIO sda,
+                GPIO scl,
+                I2CBus bus,
+                bool enableInternalPullup = true);
+
+            /**
+             * @brief Ensure the I2C bus is initialized
+             *
+             * @note Called from other namespaces. No need to call in user code.
+             *
+             * @param bus I2C bus required.
+             */
+            void require(
+                I2CBus bus = I2CBus::PRIMARY);
+
+#if !CD_CI
+            /**
+             * @brief Add an slave device ensuring the bus is initialized
+             *
+             * @param address7bits Full address in 7 bit format
+             * @param max_speed_multiplier A bus speed multiplier in the range
+             *                             [1,4]
+             * @param bus I2C bus required
+             * @return i2c_master_dev_handle_t Device handle to be used in
+             *                                 the ESP-IDF API
+             */
+            i2c_master_dev_handle_t add_device(
+                uint8_t address7bits,
+                uint8_t max_speed_multiplier,
+                I2CBus bus);
+
+            /**
+             * @brief Remove an slave device
+             *
+             * @param i2c_device Device handle
+             */
+            void remove_device(i2c_master_dev_handle_t i2c_device);
+#endif
+
+            /**
+             * @brief Check slave device availability on an I2C bus.
+             *
+             * @note require() must be called first.
+             *
+             * @param address7bits I2C address of a slave device in
+             *                     7 bits format.
+             * @param bus I2C bus.
+             * @return true If the slave device is available and ready.
+             * @return false If the slave device is not responding or
+             *         the bus was not initialized.
+             */
+            bool probe(
+                uint8_t address7bits,
+                I2CBus bus = I2CBus::PRIMARY);
+
+            /**
+             * @brief Retrieve all devices available on an I2C bus.
+             *
+             * @param[out] result List of addresses found,
+             *                    in 7-bit format.
+             * @param[in] bus I2C bus.
+             */
+            void probe(
+                std::vector<uint8_t> &result,
+                I2CBus bus = I2CBus::PRIMARY);
+
+            /**
+             * @brief Abort and reboot on an invalid I2C address
+             *
+             * @param address7bits I2C address to check in 7 bits format.
+             * @param minAddress Start of custom valid address range,
+             *                   inclusive.
+             * @param maxAddress End of custom valid address range,
+             *                  inclusive.
+             */
+            void abortOnInvalidAddress(
+                uint8_t address7bits,
+                uint8_t minAddress = 0,
+                uint8_t maxAddress = 127);
+
+            /**
+             * @brief Find the full address of a device
+             *
+             * @param[in] fullAddressList A list of full addresses
+             *                            obtained from i2c::probe()
+             * @param[in] hardwareAddress A partial 7-bit address
+             * @param[in] hardwareAddressMask A mask.
+             *                            Bits set to 1 will be taken from
+             *                            @p hardwareAddress.
+             *                            Bits set to 0 have to be found.
+             *
+             * @return 0xFF If no device was found matching
+             *              the partial @p hardwareAddress
+             * @return 0xFE If two or more devices where found
+             *              matching the partial @p hardwareAddress
+             * @return uint8_t Otherwise, a full address in 7-bit format.
+             */
+            uint8_t findFullAddress(
+                std::vector<uint8_t> &fullAddressList,
+                uint8_t hardwareAddress,
+                uint8_t hardwareAddressMask = 0b00000111);
+        } // namespace i2c
+
+        //---------------------------------------------------------------
+        // GPIO operation
+        //---------------------------------------------------------------
+
+        namespace gpio
+        {
+            /**
+             * @brief Get the mean of some continuous ADC readings.
+             *
+             * @param pin Pin number. Must be ADC-capable.
+             * @param sampleCount Number of continuous ADC samples.
+             *                    Pass 1 for a single reading (default).
+             *                    Must be greater than zero.
+             * @return int Mean of all continuous ADC samples or
+             *             -1 if @p sampleCount is not greater than zero.
+             */
+            int getADCreading(ADC_GPIO pin, int sampleCount = 1);
+
+            /**
+             * @brief Configure a pin for output
+             *
+             * @param pin Pin number
+             * @param initialLevel If true, set to HIGH after initialization.
+             *                     Otherwise, set to LOW after initialization.
+             * @param openDrain If true, configure in open drain mode.
+             *                  If false, configure in output mode.
+             */
+            void forOutput(OutputGPIO pin, bool initialLevel, bool openDrain);
+
+            /**
+             * @brief Configure a pin for digital input
+             *
+             * @param pin
+             * @param enablePullDown
+             * @param enablePullUp
+             */
+            void forInput(
+                InputGPIO pin,
+                bool enablePullDown,
+                bool enablePullUp);
+
+#if CD_CI
+            /**
+             * @brief Inject a sequence of fake ADC readings
+             *
+             * @note On each call to getADCreading() an injected
+             *       value is retrieved
+             *       in strict order. After the last value is retrieved,
+             *       the first one is retrieved again and so on.
+             *
+             * @param injectedADCValues Values to be injected
+             */
+            void setFakeADCReading(const std::vector<int> &injectedADCValues);
+#endif
+
+            /**
+             * @brief Enable an interrupt service routine
+             *
+             * @param pin Pin
+             * @param handler Routine
+             * @param param Parameter to @p handler
+             */
+            void enableISR(
+                InputGPIO pin,
+                ISRHandler handler,
+                void *param = nullptr);
+
+        } // namespace gpio
+    } // namespace hal
+} // namespace internals
